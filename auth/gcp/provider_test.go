@@ -30,6 +30,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	cryptov1 "github.com/fluxcd/pkg/apis/crypto/v1"
 	"github.com/fluxcd/pkg/auth"
 	"github.com/fluxcd/pkg/auth/gcp"
 )
@@ -137,14 +138,14 @@ func TestProvider_NewTokenForServiceAccount(t *testing.T) {
 			annotations: map[string]string{
 				"iam.gke.io/gcp-service-account": "foobar",
 			},
-			err: `invalid iam.gke.io/gcp-service-account annotation: 'foobar'. must match ^[a-zA-Z0-9-]{1,100}@[a-zA-Z0-9-]{1,100}\.iam\.gserviceaccount\.com$`,
+			err: `invalid ServiceAccount annotation key iam.gke.io/gcp-service-account: 'foobar'. must match ^[a-zA-Z0-9-]{1,100}@[a-zA-Z0-9-]{1,100}\.iam\.gserviceaccount\.com$`,
 		},
 		{
 			name: "invalid workload identity provider",
 			annotations: map[string]string{
 				"gcp.auth.fluxcd.io/workload-identity-provider": "foobar",
 			},
-			err: `invalid gcp.auth.fluxcd.io/workload-identity-provider annotation: 'foobar'. must match ^projects/\d{1,30}/locations/global/workloadIdentityPools/[^/]{1,100}/providers/[^/]{1,100}$`,
+			err: `invalid ServiceAccount annotation key gcp.auth.fluxcd.io/workload-identity-provider: 'foobar'. must match ^projects/\d{1,30}/locations/global/workloadIdentityPools/[^/]{1,100}/providers/[^/]{1,100}$`,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -402,7 +403,7 @@ func TestProvider_NewRESTConfig(t *testing.T) {
 		{
 			name:    "invalid cluster ID",
 			cluster: "invalid-cluster-id",
-			err:     "invalid GKE cluster ID: 'invalid-cluster-id'. must match ^projects/[^/]{1,200}/locations/[^/]{1,200}/clusters/[^/]{1,200}$",
+			err:     "invalid kubeconfig ConfigMap data key cluster: 'invalid-cluster-id'. must match ^projects/[^/]{1,200}/locations/[^/]{1,200}/clusters/[^/]{1,200}$",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -429,7 +430,7 @@ func TestProvider_NewRESTConfig(t *testing.T) {
 			}
 
 			if tt.cluster != "" {
-				opts = append(opts, auth.WithClusterResource(tt.cluster))
+				opts = append(opts, auth.WithKubeConfigConfigMapData(map[string]string{cryptov1.KubeConfigCluster: tt.cluster}))
 			}
 
 			if tt.clusterAddress != "" {
@@ -468,7 +469,7 @@ func TestProvider_GetAccessTokenOptionsForCluster(t *testing.T) {
 
 	t.Run("with cluster resource", func(t *testing.T) {
 		opts, err := gcp.Provider{}.GetAccessTokenOptionsForCluster(
-			auth.WithClusterResource("projects/test-project/locations/us-central1/clusters/test-cluster"))
+			auth.WithKubeConfigConfigMapData(map[string]string{cryptov1.KubeConfigCluster: "projects/test-project/locations/us-central1/clusters/test-cluster"}))
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(opts).To(HaveLen(1))
 		g.Expect(opts[0]).To(HaveLen(0)) // Empty slice - no options needed for GCP

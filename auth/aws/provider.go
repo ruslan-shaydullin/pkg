@@ -40,6 +40,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	corev1 "k8s.io/api/core/v1"
 
+	cryptov1 "github.com/fluxcd/pkg/apis/crypto/v1"
 	"github.com/fluxcd/pkg/auth"
 )
 
@@ -92,10 +93,13 @@ func (p Provider) NewControllerToken(ctx context.Context, opts ...auth.Option) (
 	}
 	confOpts = append(confOpts, config.WithRegion(stsRegion))
 
-	if e := o.STSEndpoint; e != "" {
-		if err := ValidateSTSEndpoint(e); err != nil {
-			return nil, err
-		}
+	// Empty SA annotations. There's no SA when using controller-level.
+	var saAnnotations map[string]string
+	e, ok, err := cryptov1.AnnotationAWSSTSEndpoint.Extract(saAnnotations, o.STSEndpoint)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
 		confOpts = append(confOpts, config.WithBaseEndpoint(e))
 	}
 
@@ -118,11 +122,7 @@ func (Provider) GetAudiences(context.Context, corev1.ServiceAccount) ([]string, 
 
 // GetIdentity implements auth.Provider.
 func (Provider) GetIdentity(serviceAccount corev1.ServiceAccount) (string, error) {
-	roleARN, err := getRoleARN(serviceAccount)
-	if err != nil {
-		return "", err
-	}
-	return roleARN, nil
+	return cryptov1.AnnotationEKSRoleARN.Extract(serviceAccount.Annotations)
 }
 
 // NewTokenForServiceAccount implements auth.Provider.
@@ -144,22 +144,23 @@ func (p Provider) NewTokenForServiceAccount(ctx context.Context, oidcToken strin
 			"please configure one in the object spec")
 	}
 
-	roleARN, err := getRoleARN(serviceAccount)
+	roleARN, err := cryptov1.AnnotationEKSRoleARN.Extract(serviceAccount.Annotations)
 	if err != nil {
 		return nil, err
 	}
 
-	roleSessionName := getRoleSessionName(serviceAccount, stsRegion)
+	roleSessionName := cryptov1.GetRoleSessionName(serviceAccount.Name, serviceAccount.Namespace, stsRegion)
 
 	stsOpts := sts.Options{
 		Region:     stsRegion,
 		HTTPClient: o.GetHTTPClient(),
 	}
 
-	if e := o.STSEndpoint; e != "" {
-		if err := ValidateSTSEndpoint(e); err != nil {
-			return nil, err
-		}
+	e, ok, err := cryptov1.AnnotationAWSSTSEndpoint.Extract(serviceAccount.Annotations, o.STSEndpoint)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
 		stsOpts.BaseEndpoint = &e
 	}
 
@@ -326,8 +327,8 @@ func (p Provider) NewArtifactRegistryCredentials(ctx context.Context, registryIn
 func (Provider) GetAccessTokenOptionsForCluster(opts ...auth.Option) ([][]auth.Option, error) {
 	var o auth.Options
 	o.Apply(opts...)
-	// ClusterResource is always needed for AWS as we need to extract the region.
-	region, _, err := parseCluster(o.ClusterResource)
+	// KubeConfigConfigMapData is always needed for AWS as we need to extract the region.
+	region, _, err := cryptov1.ClusterPatternAWS.ExtractRegionAndName(o.KubeConfigConfigMapData)
 	if err != nil {
 		return nil, err
 	}
@@ -351,9 +352,10 @@ func (p Provider) NewRESTConfig(ctx context.Context, accessTokens []auth.Token,
 	o.Apply(opts...)
 	hc := o.GetHTTPClient()
 
-	// ClusterResource is always needed for AWS as we need to extract the region.
-	cluster := o.ClusterResource
-	region, clusterName, err := parseCluster(cluster)
+	// KubeConfigConfigMapData is always needed for AWS as we need to extract the region.
+	cmData := o.KubeConfigConfigMapData
+	cluster := cmData[cryptov1.KubeConfigCluster]
+	region, clusterName, err := cryptov1.ClusterPatternAWS.ExtractRegionAndName(cmData)
 	if err != nil {
 		return nil, err
 	}
@@ -399,10 +401,15 @@ func (p Provider) NewRESTConfig(ctx context.Context, accessTokens []auth.Token,
 		Credentials: creds,
 		HTTPClient:  hc,
 	}
-	if e := o.STSEndpoint; e != "" {
-		if err := ValidateSTSEndpoint(e); err != nil {
-			return nil, err
-		}
+	var saAnnotations map[string]string
+	if o.ServiceAccount != nil {
+		saAnnotations = o.ServiceAccount.Annotations
+	}
+	e, ok, err := cryptov1.AnnotationAWSSTSEndpoint.Extract(saAnnotations, o.STSEndpoint)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
 		stsOpts.BaseEndpoint = &e
 	}
 	presignedReq, err := p.impl().PresignGetCallerIdentity(ctx, presignOpts, stsOpts)

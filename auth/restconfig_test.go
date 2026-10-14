@@ -28,6 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	cryptov1 "github.com/fluxcd/pkg/apis/crypto/v1"
 	"github.com/fluxcd/pkg/auth"
 	"github.com/fluxcd/pkg/cache"
 )
@@ -230,7 +231,7 @@ func TestGetRESTConfig(t *testing.T) {
 				auth.WithSTSEndpoint("https://sts.some-cloud.io"),
 				auth.WithProxyURL(url.URL{Scheme: "http", Host: "proxy.io:8080"}),
 				auth.WithCAData("ca-data"),
-				auth.WithClusterResource("cluster/resource/name"),
+				auth.WithKubeConfigConfigMapData(map[string]string{cryptov1.KubeConfigCluster: "cluster/resource/name"}),
 				auth.WithClusterAddress("https://cluster/resource/name"),
 				func(o *auth.Options) {
 					tokenCache, err := cache.NewTokenCache(3)
@@ -411,7 +412,7 @@ func TestGetRESTConfig(t *testing.T) {
 			}
 
 			if tt.cluster != "" {
-				tt.opts = append(tt.opts, auth.WithClusterResource(tt.cluster))
+				tt.opts = append(tt.opts, auth.WithKubeConfigConfigMapData(map[string]string{cryptov1.KubeConfigCluster: tt.cluster}))
 			}
 
 			creds, err := auth.GetRESTConfig(ctx, tt.provider, tt.opts...)

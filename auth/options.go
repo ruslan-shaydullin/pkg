@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/fluxcd/pkg/cache"
@@ -34,6 +35,7 @@ type Option func(*Options)
 type Options struct {
 	Client                  client.Client
 	Cache                   *cache.TokenCache
+	ServiceAccount          *corev1.ServiceAccount
 	ServiceAccountName      string
 	ServiceAccountNamespace string
 	InvolvedObject          cache.InvolvedObject
@@ -44,9 +46,9 @@ type Options struct {
 	ProxyURL                *url.URL
 	GitURL                  *url.URL
 	CAData                  string
-	ClusterResource         string
 	ClusterAddress          string
 	AllowShellOut           bool
+	KubeConfigConfigMapData map[string]string
 }
 
 // ShouldGetServiceAccountToken returns true if ServiceAccount token should be retrieved.
@@ -76,6 +78,15 @@ func WithServiceAccountName(name string) Option {
 func WithServiceAccountNamespace(namespace string) Option {
 	return func(o *Options) {
 		o.ServiceAccountNamespace = namespace
+	}
+}
+
+// WithServiceAccount sets the resolved ServiceAccount for the token. It is
+// populated by the auth package after resolving the ServiceAccount from the
+// object-level configuration, so providers can read its annotations.
+func WithServiceAccount(serviceAccount *corev1.ServiceAccount) Option {
+	return func(o *Options) {
+		o.ServiceAccount = serviceAccount
 	}
 }
 
@@ -138,12 +149,12 @@ func WithCAData(caData string) Option {
 	}
 }
 
-// WithClusterResource sets the cluster resource for creating a REST config.
-// Must be the fully qualified name of the cluster resource in the cloud
-// provider API.
-func WithClusterResource(clusterResource string) Option {
+// WithKubeConfigConfigMapData sets the data of the ConfigMap referenced by the
+// applier APIs' `.spec.kubeConfig.configMapRef` field. Providers use it as the
+// source of truth for the kubeconfig fields, e.g. the cluster resource name.
+func WithKubeConfigConfigMapData(data map[string]string) Option {
 	return func(o *Options) {
-		o.ClusterResource = clusterResource
+		o.KubeConfigConfigMapData = data
 	}
 }
 

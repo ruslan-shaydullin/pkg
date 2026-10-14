@@ -36,6 +36,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	cryptov1 "github.com/fluxcd/pkg/apis/crypto/v1"
 	"github.com/fluxcd/pkg/auth"
 )
 
@@ -87,7 +88,7 @@ func (Provider) GetAudiences(context.Context, corev1.ServiceAccount) ([]string, 
 
 // GetIdentity implements auth.Provider.
 func (Provider) GetIdentity(serviceAccount corev1.ServiceAccount) (string, error) {
-	return getIdentity(serviceAccount)
+	return cryptov1.ExtractAzureIdentity(serviceAccount.Annotations)
 }
 
 // NewTokenForServiceAccount implements auth.Provider.
@@ -97,7 +98,7 @@ func (p Provider) NewTokenForServiceAccount(ctx context.Context, oidcToken strin
 	var o auth.Options
 	o.Apply(opts...)
 
-	identity, err := getIdentity(serviceAccount)
+	identity, err := cryptov1.ExtractAzureIdentity(serviceAccount.Annotations)
 	if err != nil {
 		return nil, err
 	}
@@ -304,8 +305,10 @@ func (p Provider) NewRESTConfig(ctx context.Context, accessTokens []auth.Token,
 	host := o.ClusterAddress
 	caData := []byte(o.CAData)
 	if host == "" || len(caData) == 0 {
-		cluster := o.ClusterResource
-		subscriptionID, resourceGroup, clusterName, err := parseCluster(cluster)
+		cmData := o.KubeConfigConfigMapData
+		cluster := cmData[cryptov1.KubeConfigCluster]
+		subscriptionID, resourceGroup, clusterName, err :=
+			cryptov1.ClusterPatternAzure.ExtractSubscriptionResourceGroupAndName(cmData)
 		if err != nil {
 			return nil, err
 		}

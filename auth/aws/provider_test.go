@@ -30,6 +30,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	cryptov1 "github.com/fluxcd/pkg/apis/crypto/v1"
 	"github.com/fluxcd/pkg/auth"
 	"github.com/fluxcd/pkg/auth/aws"
 	"github.com/fluxcd/pkg/auth/generic"
@@ -54,11 +55,6 @@ func TestProvider_NewControllerToken(t *testing.T) {
 		{
 			name:        "valid",
 			stsEndpoint: "https://sts.amazonaws.com",
-		},
-		{
-			name:        "invalid sts endpoint",
-			stsEndpoint: "https://something.amazonaws.com",
-			err:         `invalid STS endpoint: 'https://something.amazonaws.com'. must match ^https://(.+\.)?sts(-fips)?(\.[^.]+)?(\.vpce)?\.amazonaws\.com$`,
 		},
 		{
 			name:          "missing region",
@@ -104,12 +100,13 @@ func TestProvider_NewControllerToken(t *testing.T) {
 
 func TestProvider_NewTokenForServiceAccount(t *testing.T) {
 	for _, tt := range []struct {
-		name               string
-		roleARN            string
-		stsEndpoint        string
-		artifactRepository string
-		skipSTSRegion      bool
-		err                string
+		name                  string
+		roleARN               string
+		stsEndpoint           string
+		stsEndpointAnnotation string
+		artifactRepository    string
+		skipSTSRegion         bool
+		err                   string
 	}{
 		{
 			name:        "valid",
@@ -122,10 +119,17 @@ func TestProvider_NewTokenForServiceAccount(t *testing.T) {
 			stsEndpoint: "https://sts.amazonaws.com",
 		},
 		{
-			name:        "invalid sts endpoint",
-			roleARN:     "arn:aws:iam::1234567890:role/some-role",
-			stsEndpoint: "https://something.amazonaws.com",
-			err:         `invalid STS endpoint: 'https://something.amazonaws.com'. must match ^https://(.+\.)?sts(-fips)?(\.[^.]+)?(\.vpce)?\.amazonaws\.com$`,
+			name:                  "invalid sts endpoint annotation",
+			roleARN:               "arn:aws:iam::1234567890:role/some-role",
+			stsEndpointAnnotation: "https://something.amazonaws.com",
+			err:                   `invalid ServiceAccount annotation key aws.auth.fluxcd.io/sts-endpoint: 'https://something.amazonaws.com'. must match ^https://(.+\.)?sts(-fips)?(\.[^.]+)?(\.vpce)?\.amazonaws\.com$`,
+		},
+		{
+			name:                  "legacy sts endpoint with rfc0014 annotation",
+			roleARN:               "arn:aws:iam::1234567890:role/some-role",
+			stsEndpoint:           "https://sts.amazonaws.com",
+			stsEndpointAnnotation: "https://sts.us-east-1.amazonaws.com",
+			err:                   `legacy Bucket.spec.sts.endpoint for AWS is not allowed when annotation aws.auth.fluxcd.io/sts-endpoint is present`,
 		},
 		{
 			name:          "missing region",
@@ -139,7 +143,7 @@ func TestProvider_NewTokenForServiceAccount(t *testing.T) {
 			name:        "invalid role ARN",
 			roleARN:     "foobar",
 			stsEndpoint: "https://sts.amazonaws.com",
-			err:         `invalid eks.amazonaws.com/role-arn annotation: 'foobar'. must match ^arn:aws[\w-]*:iam::[0-9]{1,30}:role/.{1,200}$`,
+			err:         `invalid ServiceAccount annotation key eks.amazonaws.com/role-arn: 'foobar'. must match ^arn:aws[\w-]*:iam::[0-9]{1,30}:role/.{1,200}$`,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -157,11 +161,15 @@ func TestProvider_NewTokenForServiceAccount(t *testing.T) {
 			}
 
 			oidcToken := "oidc-token"
+			saAnnotations := map[string]string{"eks.amazonaws.com/role-arn": tt.roleARN}
+			if tt.stsEndpointAnnotation != "" {
+				saAnnotations[cryptov1.AnnotationAWSSTSEndpoint.String()] = tt.stsEndpointAnnotation
+			}
 			serviceAccount := corev1.ServiceAccount{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:        "test-sa",
 					Namespace:   "test-ns",
-					Annotations: map[string]string{"eks.amazonaws.com/role-arn": tt.roleARN},
+					Annotations: saAnnotations,
 				},
 			}
 
@@ -505,7 +513,7 @@ func TestProvider_NewRESTConfig(t *testing.T) {
 			name:           "CA and address only. EKS requires cluster to extract region",
 			clusterAddress: "https://EXAMPLE1234567890123456789012345678.gr7.us-east-1.eks.amazonaws.com:443",
 			caData:         "-----BEGIN CERTIFICATE-----",
-			err:            `invalid EKS cluster ARN: ''. must match ^arn:aws[\w-]*:eks:([^:]{1,100}):[0-9]{1,30}:cluster/(.{1,200})$`,
+			err:            `EKS cluster missing from kubeconfig ConfigMap`,
 		},
 		{
 			name:           "valid EKS cluster with address override",
@@ -518,15 +526,9 @@ func TestProvider_NewRESTConfig(t *testing.T) {
 			stsEndpoint: "https://sts.amazonaws.com",
 		},
 		{
-			name:        "invalid STS endpoint",
-			cluster:     "arn:aws:eks:us-east-1:123456789012:cluster/test-cluster",
-			stsEndpoint: "https://invalid.amazonaws.com",
-			err:         `invalid STS endpoint: 'https://invalid.amazonaws.com'. must match ^https://(.+\.)?sts(-fips)?(\.[^.]+)?(\.vpce)?\.amazonaws\.com$`,
-		},
-		{
 			name:    "invalid cluster ARN",
 			cluster: "invalid-cluster-arn",
-			err:     `invalid EKS cluster ARN: 'invalid-cluster-arn'. must match ^arn:aws[\w-]*:eks:([^:]{1,100}):[0-9]{1,30}:cluster/(.{1,200})$`,
+			err:     `invalid kubeconfig ConfigMap data key cluster: 'invalid-cluster-arn'. must match ^arn:aws[\w-]*:eks:([^:]{1,100}):[0-9]{1,30}:cluster/(.{1,200})$`,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -551,7 +553,7 @@ func TestProvider_NewRESTConfig(t *testing.T) {
 			}
 
 			if tt.cluster != "" {
-				opts = append(opts, auth.WithClusterResource(tt.cluster))
+				opts = append(opts, auth.WithKubeConfigConfigMapData(map[string]string{cryptov1.KubeConfigCluster: tt.cluster}))
 			}
 
 			if tt.clusterAddress != "" {
@@ -594,7 +596,7 @@ func TestProvider_GetAccessTokenOptionsForCluster(t *testing.T) {
 	g := NewWithT(t)
 
 	opts, err := aws.Provider{}.GetAccessTokenOptionsForCluster(
-		auth.WithClusterResource("arn:aws:eks:us-west-2:123456789012:cluster/my-cluster"))
+		auth.WithKubeConfigConfigMapData(map[string]string{cryptov1.KubeConfigCluster: "arn:aws:eks:us-west-2:123456789012:cluster/my-cluster"}))
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(opts).To(HaveLen(1))
 

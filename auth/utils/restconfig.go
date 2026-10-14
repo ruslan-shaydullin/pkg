@@ -92,9 +92,7 @@ func GetRESTConfig(ctx context.Context,
 
 	// Configure options.
 	opts = slices.Clone(opts)
-	if c, ok := cm.Data[meta.KubeConfigKeyCluster]; ok {
-		opts = append(opts, auth.WithClusterResource(c))
-	}
+	opts = append(opts, auth.WithKubeConfigConfigMapData(cm.Data))
 	if a, ok := cm.Data[meta.KubeConfigKeyAddress]; ok {
 		opts = append(opts, auth.WithClusterAddress(a))
 	}

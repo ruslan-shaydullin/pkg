@@ -34,6 +34,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	cryptov1 "github.com/fluxcd/pkg/apis/crypto/v1"
 	"github.com/fluxcd/pkg/auth"
 	"github.com/fluxcd/pkg/auth/azure"
 )
@@ -92,23 +93,23 @@ func TestProvider_NewTokenForServiceAccount(t *testing.T) {
 		{
 			name: "valid",
 			annotations: map[string]string{
-				"azure.workload.identity/tenant-id": "tenant-id",
-				"azure.workload.identity/client-id": "client-id",
+				"azure.workload.identity/tenant-id": "11111111-1111-1111-1111-111111111111",
+				"azure.workload.identity/client-id": "22222222-2222-2222-2222-222222222222",
 			},
 		},
 		{
 			name: "tenant id missing",
 			annotations: map[string]string{
-				"azure.workload.identity/client-id": "client-id",
+				"azure.workload.identity/client-id": "22222222-2222-2222-2222-222222222222",
 			},
-			err: "azure tenant ID is not set in the service account annotation azure.workload.identity/tenant-id",
+			err: "annotation azure.workload.identity/tenant-id is required",
 		},
 		{
 			name: "client id missing",
 			annotations: map[string]string{
-				"azure.workload.identity/tenant-id": "tenant-id",
+				"azure.workload.identity/tenant-id": "11111111-1111-1111-1111-111111111111",
 			},
-			err: "azure client ID is not set in the service account annotation azure.workload.identity/client-id",
+			err: "annotation azure.workload.identity/client-id is required",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -116,8 +117,8 @@ func TestProvider_NewTokenForServiceAccount(t *testing.T) {
 
 			impl := &mockImplementation{
 				t:            t,
-				argTenantID:  "tenant-id",
-				argClientID:  "client-id",
+				argTenantID:  "11111111-1111-1111-1111-111111111111",
+				argClientID:  "22222222-2222-2222-2222-222222222222",
 				argOIDCToken: "oidc-token",
 				argProxyURL:  &url.URL{Scheme: "http", Host: "proxy.example.com"},
 				argScopes:    []string{"scope1", "scope2"},
@@ -166,13 +167,13 @@ func TestProvider_GetIdentity(t *testing.T) {
 	identity, err := azure.Provider{}.GetIdentity(corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{
-				"azure.workload.identity/client-id": "client-id",
-				"azure.workload.identity/tenant-id": "tenant-id",
+				"azure.workload.identity/client-id": "22222222-2222-2222-2222-222222222222",
+				"azure.workload.identity/tenant-id": "11111111-1111-1111-1111-111111111111",
 			},
 		},
 	})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(identity).To(Equal("tenant-id/client-id"))
+	g.Expect(identity).To(Equal("11111111-1111-1111-1111-111111111111/22222222-2222-2222-2222-222222222222"))
 }
 
 func TestProvider_NewArtifactRegistryCredentials(t *testing.T) {
@@ -553,7 +554,7 @@ func TestProvider_NewRESTConfig(t *testing.T) {
 		{
 			name:    "invalid cluster ID",
 			cluster: "invalid-cluster-id",
-			err:     `invalid AKS cluster ID: 'invalid-cluster-id'. must match (?i)^/subscriptions/([^/]{36})/resourceGroups/([^/]{1,200})/providers/Microsoft\.ContainerService/managedClusters/([^/]{1,200})$`,
+			err:     `invalid kubeconfig ConfigMap data key cluster: 'invalid-cluster-id'. must match (?i)^/subscriptions/([^/]{36})/resourceGroups/([^/]{1,200})/providers/Microsoft\.ContainerService/managedClusters/([^/]{1,200})$`,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -592,7 +593,7 @@ func TestProvider_NewRESTConfig(t *testing.T) {
 			}
 
 			if tt.cluster != "" {
-				opts = append(opts, auth.WithClusterResource(tt.cluster))
+				opts = append(opts, auth.WithKubeConfigConfigMapData(map[string]string{cryptov1.KubeConfigCluster: tt.cluster}))
 			}
 
 			if tt.clusterAddress != "" {
@@ -631,7 +632,7 @@ func TestProvider_GetAccessTokenOptionsForCluster(t *testing.T) {
 
 	t.Run("needs to fetch cluster", func(t *testing.T) {
 		opts, err := azure.Provider{}.GetAccessTokenOptionsForCluster(
-			auth.WithClusterResource("/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.ContainerService/managedClusters/test-cluster"))
+			auth.WithKubeConfigConfigMapData(map[string]string{cryptov1.KubeConfigCluster: "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.ContainerService/managedClusters/test-cluster"}))
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(opts).To(HaveLen(2))
 
@@ -656,7 +657,7 @@ func TestProvider_GetAccessTokenOptionsForCluster(t *testing.T) {
 		t.Setenv("AZURE_ENVIRONMENT_FILEPATH", tempFileName)
 
 		opts, err := azure.Provider{}.GetAccessTokenOptionsForCluster(
-			auth.WithClusterResource("/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.ContainerService/managedClusters/test-cluster"))
+			auth.WithKubeConfigConfigMapData(map[string]string{cryptov1.KubeConfigCluster: "/subscriptions/12345678-1234-1234-1234-123456789012/resourceGroups/test-rg/providers/Microsoft.ContainerService/managedClusters/test-cluster"}))
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(opts).To(HaveLen(2))
 

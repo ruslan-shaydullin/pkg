@@ -31,6 +31,7 @@ import (
 	htransport "google.golang.org/api/transport/http"
 	corev1 "k8s.io/api/core/v1"
 
+	cryptov1 "github.com/fluxcd/pkg/apis/crypto/v1"
 	auth "github.com/fluxcd/pkg/auth"
 )
 
@@ -74,16 +75,16 @@ func (Provider) GetAudiences(ctx context.Context, serviceAccount corev1.ServiceA
 
 	// Check if a workload identity provider is specified in the service account.
 	// If so, the current cluster is not GKE and the audience is the provider itself.
-	audience, err := getWorkloadIdentityProviderAudience(serviceAccount)
+	wip, ok, err := cryptov1.AnnotationGCPWorkloadIdentityProvider.Extract(serviceAccount.Annotations)
 	if err != nil {
 		return nil, err
 	}
-	if audience != "" {
-		return []string{audience}, nil
+	if ok {
+		return []string{getWorkloadIdentityProviderAudience(wip)}, nil
 	}
 
 	// Assume we are in GKE. In this case, the audience is the workload identity pool.
-	audience, err = gkeMetadata.workloadIdentityPool(ctx)
+	audience, err := gkeMetadata.workloadIdentityPool(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +93,7 @@ func (Provider) GetAudiences(ctx context.Context, serviceAccount corev1.ServiceA
 
 // GetIdentity implements auth.Provider.
 func (Provider) GetIdentity(serviceAccount corev1.ServiceAccount) (string, error) {
-	email, err := getServiceAccountEmail(serviceAccount)
+	email, _, err := cryptov1.AnnotationGCPServiceAccount.Extract(serviceAccount.Annotations)
 	if err != nil {
 		return "", err
 	}
@@ -108,13 +109,16 @@ func (p Provider) NewTokenForServiceAccount(ctx context.Context, oidcToken strin
 
 	// Check if a workload identity provider is specified in the service account.
 	// If so, the current cluster is not GKE and the audience is the provider itself.
-	audience, err := getWorkloadIdentityProviderAudience(serviceAccount)
+	wip, ok, err := cryptov1.AnnotationGCPWorkloadIdentityProvider.Extract(serviceAccount.Annotations)
 	if err != nil {
 		return nil, err
 	}
 
-	// Assume we are in GKE. In this case, retrieve the audience from the metadata.
-	if audience == "" {
+	var audience string
+	if ok {
+		audience = getWorkloadIdentityProviderAudience(wip)
+	} else {
+		// Assume we are in GKE. In this case, retrieve the audience from the metadata.
 		audience, err = gkeMetadata.getAudience(ctx)
 		if err != nil {
 			return nil, err
@@ -130,12 +134,12 @@ func (p Provider) NewTokenForServiceAccount(ctx context.Context, oidcToken strin
 		Scopes:               scopes,
 	}
 
-	email, err := getServiceAccountEmail(serviceAccount)
+	email, ok, err := cryptov1.AnnotationGCPServiceAccount.Extract(serviceAccount.Annotations)
 	if err != nil {
 		return nil, err
 	}
 
-	if email != "" { // impersonation
+	if ok { // impersonation
 		conf.ServiceAccountImpersonationURL = fmt.Sprintf(
 			"https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/%s:generateAccessToken",
 			email)
@@ -221,8 +225,9 @@ func (p Provider) NewRESTConfig(ctx context.Context, accessTokens []auth.Token,
 	host := o.ClusterAddress
 	caData := []byte(o.CAData)
 	if host == "" || len(caData) == 0 {
-		cluster := o.ClusterResource
-		if err := parseCluster(cluster); err != nil {
+		cmData := o.KubeConfigConfigMapData
+		cluster := cmData[cryptov1.KubeConfigCluster]
+		if err := cryptov1.ClusterPatternGCP.Validate(cmData); err != nil {
 			return nil, err
 		}
 
@@ -272,4 +277,8 @@ func (p Provider) impl() Implementation {
 		return implementation{}
 	}
 	return p.Implementation
+}
+
+func getWorkloadIdentityProviderAudience(wip string) string {
+	return fmt.Sprintf("//iam.googleapis.com/%s", wip)
 }

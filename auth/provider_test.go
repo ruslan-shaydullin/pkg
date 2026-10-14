@@ -28,6 +28,7 @@ import (
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
 
+	cryptov1 "github.com/fluxcd/pkg/apis/crypto/v1"
 	"github.com/fluxcd/pkg/auth"
 )
 
@@ -184,7 +185,7 @@ func (m *mockProvider) GetAccessTokenOptionsForCluster(opts ...auth.Option) ([][
 	g := NewWithT(m.t)
 	var o auth.Options
 	o.Apply(opts...)
-	g.Expect(o.ClusterResource).To(Equal(m.paramCluster))
+	g.Expect(o.KubeConfigConfigMapData[cryptov1.KubeConfigCluster]).To(Equal(m.paramCluster))
 	if m.returnRESTConfigOptsErr != "" {
 		return nil, errors.New(m.returnRESTConfigOptsErr)
 	}
@@ -197,7 +198,7 @@ func (m *mockProvider) NewRESTConfig(ctx context.Context, accessTokens []auth.To
 	g := NewWithT(m.t)
 	var o auth.Options
 	o.Apply(opts...)
-	g.Expect(o.ClusterResource).To(Equal(m.paramCluster))
+	g.Expect(o.KubeConfigConfigMapData[cryptov1.KubeConfigCluster]).To(Equal(m.paramCluster))
 	g.Expect(o.ClusterAddress).To(Equal(m.paramClusterAddress))
 	g.Expect(accessTokens).To(Equal(m.paramAccessTokens))
 	m.checkOptions(opts...)

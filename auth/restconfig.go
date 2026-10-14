@@ -28,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	cryptov1 "github.com/fluxcd/pkg/apis/crypto/v1"
 	"github.com/fluxcd/pkg/cache"
 )
 
@@ -113,21 +114,8 @@ func GetRESTConfig(ctx context.Context, provider RESTConfigProvider, opts ...Opt
 		accessTokens = append(accessTokens, token)
 	}
 
-	// Prepare a function to create the restconfig if needed.
-	newRESTConfig := func() (*RESTConfig, error) {
-		conf, err := provider.NewRESTConfig(ctx, accessTokens, opts...)
-		if err != nil {
-			return nil, err
-		}
-		return conf, nil
-	}
-
-	// Bail out early if cache is disabled.
-	if o.Cache == nil {
-		return newRESTConfig()
-	}
-
-	// Build cache key.
+	// Resolve the object-level ServiceAccount, if any, so providers can read
+	// its annotations.
 	var serviceAccount *corev1.ServiceAccount
 	var providerIdentity string
 	var audiences []string
@@ -143,12 +131,34 @@ func GetRESTConfig(ctx context.Context, provider RESTConfigProvider, opts ...Opt
 			return nil, err
 		}
 	}
+
+	// Provider options.
+	providerOpts := opts
+	if serviceAccount != nil {
+		providerOpts = append(slices.Clone(opts), WithServiceAccount(serviceAccount))
+	}
+
+	// Prepare a function to create the restconfig if needed.
+	newRESTConfig := func() (*RESTConfig, error) {
+		conf, err := provider.NewRESTConfig(ctx, accessTokens, providerOpts...)
+		if err != nil {
+			return nil, err
+		}
+		return conf, nil
+	}
+
+	// Bail out early if cache is disabled.
+	if o.Cache == nil {
+		return newRESTConfig()
+	}
+
+	// Build cache key.
 	var cacheKeyParts []string
 	for i, atOpts := range accessTokenOpts {
 		key := buildAccessTokenCacheKey(provider, audiences, providerIdentity, serviceAccount, atOpts...)
 		cacheKeyParts = append(cacheKeyParts, fmt.Sprintf("accessToken%dCacheKey=%s", i, key))
 	}
-	if c := o.ClusterResource; c != "" {
+	if c := o.KubeConfigConfigMapData[cryptov1.KubeConfigCluster]; c != "" {
 		cacheKeyParts = append(cacheKeyParts, fmt.Sprintf("cluster=%s", c))
 	}
 	if a := o.ClusterAddress; a != "" {
